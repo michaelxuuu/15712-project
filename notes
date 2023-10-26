@@ -1,0 +1,5 @@
+Thread must disable preemption on the core it runs on *before* aquiring a spinlock
+
+Imagine the following scenario:
+
+Thread 't', running on core 'x', calls 'thr_create()' to create a new thread. After creating the thread control block, it attempts to add it to the thread table of the core it runs on. To do this, it acquires the spin lock 'lk' on the thread table first. Suppose then it gets preempted due to a timer signal. In the signal handler, it yields to the scheduler, which also tries to acquire the same lock held by 't' in order to find the next runnable thread and schedule it. However, it fails to do so because the lock is held by 't,' and 't' has been descheduled. As a result, the scheduler gets stuck. Unfortunately, the scheduler has all signals blocked and cannot be preempted, which means it cannot schedule 't' to allow it to run and release the lock, leading to a core deadlock.
