@@ -37,7 +37,7 @@ cleanup() {
         "mov %2, %%rsi;" // length of the memory to unmap
         "mov $0, %%rdx;" // flags (set to 0)
         "syscall;"
-        "jmp .;"
+        "jmp .;" // TODO: can we swtch() to scheduler directly from here :)
         :: "i"(SYS_munmap), "r" (thr->stack), "i" (STACKLEN)
     );
 }
