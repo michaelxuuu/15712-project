@@ -10,7 +10,7 @@ sleepspinlock_init(struct sleeplock *lk) {
 void
 sleeplock_aquire(struct sleeplock *lk) {
     struct waiter waiter;
-    struct thr *thr;
+    struct tcb *thr;
     thr = mycore->thr;
     waiter.thr = thr;
     waiter.next = 0;
@@ -30,7 +30,7 @@ sleeplock_aquire(struct sleeplock *lk) {
         // cmpxchg(&thr->state, RUNNING, SLEEPING);
         // Sleep
         dbg_printf("%s sleep\n", thr->name);
-        pthread_kill(mycore->pthread, SIGUSR1);
+        yield(0);
     }
 }
 
@@ -41,8 +41,7 @@ sleeplock_release(struct sleeplock *lk) {
         lk->owner = 0;
         release(&lk->lk);
     } else {
-        // asm ("int $0x3");
-        struct thr *thr = lk->waiters.next->thr;
+        struct tcb *thr = lk->waiters.next->thr;
         // Dequeue
         lk->waiters.next = lk->waiters.next->next;
         // Assign owner

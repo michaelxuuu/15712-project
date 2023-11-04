@@ -5,12 +5,12 @@
 }
 
 struct waiter {
-    struct thr* thr;
+    struct tcb* thr;
     struct waiter* next;
 };
 
 struct sleeplock {
     struct waiter waiters;
     struct spinlock lk;
-    struct thr* owner;
+    struct tcb* owner;
 };

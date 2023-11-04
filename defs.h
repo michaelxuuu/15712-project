@@ -9,21 +9,45 @@
 
 #include <sys/time.h>
 #include <sys/mman.h>
+#include <sys/syscall.h>
 
 // Order matters here
 #include "spinlock.h"
 #include "sleeplock.h"
 #include "con.h"
-#include "thr.h"
+#include "tid.h"
+#include "tcb.h"
 #include "core.h"
+#include "runtime.h"
 
-struct thr;
+struct tcb;
+struct tid;
 struct core;
-struct thrid;
 struct context;
-struct runtime;
 struct spinlock;
 struct sleeplock;
+
+enum state {
+    RUNNING,
+    RUNNABLE,
+    SLEEPING,
+    JOINABLE,
+    JOINED
+};
+
+#define STACKLEN 4096
+
+#define atomic_load_and_update(var, old, new, udpate) \
+    do { \
+        old = var; \
+        new = udpate; \
+    } while(cmpxchg(&var, old, new) != old);
+
+// runtime.c
+extern struct runtime g;
+
+// core.c (pthread local)
+extern __thread struct core* mycore;
 
 // spinlock.c
 void acquire(struct spinlock*);
@@ -35,11 +59,6 @@ void sleepspinlock_init(struct sleeplock*);
 void sleeplock_aquire(struct sleeplock*);
 void sleeplock_release(struct sleeplock*);
 
-// wrapper.c
-void* _malloc(size_t size);
-void _free(void* ptr);
-void _printf(const char* fmt, ...);
-
 // asm.S
 void doret1();
 void doret2();
@@ -47,10 +66,8 @@ void sigret();
 int xchg(void* p, int new);
 int cmpxchg(void* p, int old, int new);
 
-// thr.c
-extern struct runtime g;
-extern __thread struct core* mycore;
-void yield();
+// thread.c
+void yield(int fromsig);
 void swtch(struct context**, struct context*);
 
 // sig.c
@@ -58,11 +75,12 @@ void sig_init();
 int sig_disable();
 void sig_enable();
 
-#define atomic_load_and_update(var, old, new, udpate) \
-do { \
-    old = var; \
-    new = udpate; \
-} while(cmpxchg(&var, old, new) != old);
 
+// wrapper.c
+void* _malloc(size_t size);
+void _free(void* ptr);
+void _printf(const char* fmt, ...);
+
+// debug.c
 void dbg_printf(char *fmt, ...);
 

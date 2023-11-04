@@ -8,12 +8,12 @@ sigalrm_handler(int signo) {
     }
     for (int i = 1; i < g.ncore; i++)
         pthread_kill(g.cores[i].pthread, SIGUSR1);
-    yield();
+    yield(1);
 }
 
 void
 sigusr1_handler(int signo, siginfo_t *siginfo, void *context) {
-    yield();
+    yield(1);
 }
 
 void
