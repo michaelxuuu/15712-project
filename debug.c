@@ -9,89 +9,96 @@ gs() {
     return s;
 }
 
-static char digits[] = "0123456789abcdef";
 
-void consputc(char c) {
-    write(0, &c, 1);
+void write_char(char c) {
+    write(STDOUT_FILENO, &c, 1);
 }
 
-static void
-printint(int xx, int base, int sign)
-{
-  char buf[16];
-  int i;
-  int x;
-
-  if(sign && (sign = xx < 0))
-    x = -xx;
-  else
-    x = xx;
-
-  i = 0;
-  do {
-    buf[i++] = digits[x % base];
-  } while((x /= base) != 0);
-
-  if(sign)
-    buf[i++] = '-';
-
-  while(--i >= 0)
-    consputc(buf[i]);
-}
-
-static void
-printptr(uint64_t x)
-{
-  int i;
-  consputc('0');
-  consputc('x');
-  for (i = 0; i < (sizeof(uint64_t) * 2); i++, x <<= 4)
-    consputc(digits[x >> (sizeof(uint64_t) * 8 - 4)]);
-}
-
-
-void
-dbg_printf(char *fmt, ...)
-{
-  va_list ap;
-  int i, c, locking;
-  char *s;
-
-  va_start(ap, fmt);
-  for(i = 0; (c = fmt[i] & 0xff) != 0; i++){
-    if(c != '%'){
-      consputc(c);
-      continue;
+void write_str(const char *str) {
+    while (*str) {
+        write_char(*str++);
     }
-    c = fmt[++i] & 0xff;
-    if(c == 0)
-      break;
-    switch(c){
-    case 'd':
-      printint(va_arg(ap, int), 10, 1);
-      break;
-    case 'x':
-      printint(va_arg(ap, int), 16, 1);
-      break;
-    case 'p':
-      printptr(va_arg(ap, uint64_t));
-      break;
-    case 's':
-      if((s = va_arg(ap, char*)) == 0)
-        s = "(null)";
-      for(; *s; s++)
-        consputc(*s);
-      break;
-    case '%':
-      consputc('%');
-      break;
-    default:
-      // Print unknown % sequence to draw attention.
-      consputc('%');
-      consputc(c);
-      break;
-    }
-  }
-  va_end(ap);
 }
 
+void write_hex(unsigned long value) {
+    char buffer[16];  // Assuming a long integer, so 16 characters plus null terminator
+    int length = 0;
+
+    // Convert long integer to hexadecimal string
+    do {
+        buffer[length++] = "0123456789abcdef"[value % 16];
+        value /= 16;
+    } while (value);
+
+    // Reverse the string
+    for (int i = length - 1; i >= 0; --i) {
+        write_char(buffer[i]);
+    }
+}
+
+void write_int(int value) {
+    if (value < 0) {
+        write_char('-');
+        value = -value;
+    }
+    write_hex(value);
+}
+
+void write_unsigned(unsigned int value) {
+    write_hex(value);
+}
+
+void write_ptr(void *ptr) {
+    write_hex((unsigned long)ptr);
+}
+
+void dbg_printf(char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    while (*fmt) {
+        if (*fmt == '%' && *(fmt + 1) != '\0') {
+            switch (*(++fmt)) {
+                case 'd':
+                    write_int(va_arg(args, int));
+                    break;
+                case 's':
+                    write_str(va_arg(args, const char *));
+                    break;
+                case 'x':
+                    write_hex(va_arg(args, unsigned int));
+                    break;
+                case 'l':
+                    if (*(fmt + 1) == 'x') {
+                        write_hex(va_arg(args, unsigned long));
+                        fmt++;
+                    } else if (*(fmt + 1) == 'u') {
+                        write_hex(va_arg(args, unsigned long));
+                        fmt++;
+                    } else if (*(fmt + 1) == 'd') {
+                        write_int(va_arg(args, int));
+                        fmt++;
+                    } else {
+                        write_char('l');
+                    }
+                    break;
+                case 'u':
+                    if (*(fmt + 1) == 'l') {
+                        write_unsigned(va_arg(args, unsigned long));
+                        fmt++;
+                    } else {
+                        write_unsigned(va_arg(args, unsigned int));
+                    }
+                    break;
+                case 'p':
+                    write_ptr(va_arg(args, void *));
+                    break;
+                default:
+                    write_char(*fmt);
+            }
+        } else {
+            write_char(*fmt);
+        }
+        fmt++;
+    }
+    va_end(args);
+}

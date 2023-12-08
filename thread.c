@@ -1,57 +1,33 @@
 #include "defs.h"
 
-// Use it to return from scheduler 
-// if the scheduler's not entered due to a signal
 void
-schedret() {
-    release(&mycore->lk);
-    sig_enable();
-}
-
-// siguer1_hldr() goes here with fromsig = 1
-// Other functions goes here with fromsig = 0
-void
-yield(int fromsig) {
+yield() {
     acquire(&mycore->lk);
     if (mycore->thr->state == RUNNING)
         mycore->thr->state = RUNNABLE;
     swtch(&mycore->thr->con, mycore->scheduler);
-    if (fromsig) release(&mycore->lk);
-    else schedret();
+    release(&mycore->lk);
 }
 
-// Thread goes here after it finishes
-void
-cleanup() {
-    uint64_t rax;
-    asm volatile ("":"=a"(rax));
-    struct tcb *thr = mycore->thr;
-    thr->status = (void*)rax;
-    thr->state = JOINABLE;
-    yield(0);
-    // woken up by thr_join()
-    // free my own stack
-    asm volatile (
-        "mov %0, %%rax;" // syscall number for munmap
-        "mov %1, %%rdi;" // address to unmap
-        "mov %2, %%rsi;" // length of the memory to unmap
-        "mov $0, %%rdx;" // flags (set to 0)
-        "syscall;"
-        "jmp .;" // TODO: can we swtch() to scheduler directly from here :)
-        :: "i"(SYS_munmap), "r" (thr->stack), "i" (STACKLEN)
-    );
+static void
+start_uthread() {
+    struct tcb *thr;
+    release(&mycore->lk); // this does not enable siganls. we got here from scheduler() and we entered scheduler from signal handler where signals are disabled.
+    sig_enable(); // there'll be no sigret helping us re-enable interrupts. thus, we need to re-enable interrupts ourselves
+    thr = mycore->thr; // obtain the thread to execute from the core structure (save to do this before and after re-enabling signals)
+    thr->status = thr->func(thr->arg); // exeucte the function and collect the return status
+    thr->state = JOINABLE; // won't be scheduled agained
+    yield(); // yield the cpu immediately, resource's collected when being joined
 }
 
 // main thread tcb
-static struct tcb* thr0 = &(struct tcb){
-    .name = "main",
-};
+static struct tcb* thr0 = &(struct tcb){};
 
 // core 0 scheduler stack
 // Other cores will have their scheduler stack created by pthread_create()
 static char stack0[STACKLEN] __attribute__((aligned(16)));
 
-void
+static void
 scheduler() {
     for (;;) {
         acquire(&mycore->lk);
@@ -59,40 +35,32 @@ scheduler() {
             if (thr->state != RUNNABLE) continue;
             thr->state = RUNNING;
             mycore->thr = thr;
-            dbg_printf("schedule %s\n", thr->name);
+            dbg_printf("swtch to %s\n", thr->name);
             swtch(&mycore->scheduler, thr->con);
         }
         release(&mycore->lk);
     }
 }
 
-void timer_init() {
-    struct itimerval timer;
-    memset(&timer, 0, sizeof(timer));
-    timer.it_value.tv_sec = 1;
-    timer.it_interval.tv_sec = 1;
-    // timer.it_value.tv_usec = 1000 * 10;
-    // timer.it_interval.tv_usec = 1000 * 10;
-    setitimer(ITIMER_REAL, &timer, NULL);
-}
-
 // Run by each core to initialize themselves
-void*
+static void*
 core_init(void* core){
     // Run by all cores
     mycore = (struct core*)core;
     mycore->id = mycore - &g.cores[0];
     mycore->thr = 0;
+    mycore->term = 0;
     mycore->lkcnt = 0;
     mycore->thrs.next = 0;
     mycore->scheduler = (struct context*)0xdeadbeef;
-    spinlock_init(&mycore->lk);
+    spinlock_init(&mycore->lk, "mycore.lk");
     // Run by core 0
     if (mycore == &g.cores[0]) {
         sig_init();
         timer_init();
+        wrapper_init();
         // First thread being the thread that's running now
-        thr0->name = "t0";
+        thr0->name = "main";
         thr0->next = 0;
         thr0->core = core;
         thr0->state = RUNNABLE;
@@ -108,7 +76,7 @@ core_init(void* core){
         mycore->scheduler->rip = (unsigned long)scheduler;
         // Create other "cores"
         sig_disable(); // This will have other cores start with signals disabled
-                        // Their siganls will be enabled unconditionally (in schedret()) 
+                        // Their siganls will be enabled unconditionally (in start_uthread()) 
                         // when their first thread is scheduled to run
         for (int i = 0; i < g.ncore-1; i++)
             pthread_create(&g.cores[i].pthread, 0, core_init, (void*)&g.cores[i]);
@@ -143,27 +111,29 @@ runtime_init() {
 }
 
 uint64_t
-thr_create(void*(*func)(), void* arg, char* name) {
+uthread_create(uthread_func func, void* arg, char* name) {
     if (!g.init) runtime_init();
     // Set up stack
     char *stack = (char*)mmap(NULL, STACKLEN, PROT_READ |
         PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     char *sp = stack + STACKLEN;
     // Put tcb at the top of the stack
-    sp -= (sizeof(struct tcb) + 15) & ~(0x10-1);
-    struct tcb *tcb = (struct tcb*)sp;
-    tcb->name = name;
-    tcb->stack = stack;
-    tcb->state = RUNNABLE;
-    tcb->sync = 0;
-    tcb->joincnt = 0;
-    *(void* *)(sp -= sizeof(void*)) = arg;
-    *(void* *)(sp -= sizeof(void*)) = cleanup;
-    *(void* *)(sp -= sizeof(void*)) = doret1;
-    *(void* *)(sp -= sizeof(void*)) = func;
-    *(void* *)(sp -= sizeof(void*)) = doret2;
-    tcb->con = (struct context*)(sp -= sizeof(struct context));
-    tcb->con->rip = (unsigned long)schedret; // swtch() returns to schedret() from scheduler()
+    sp -= sizeof(struct tcb);
+    struct tcb *thr = (struct tcb*)sp;
+    thr->name = name;
+    thr->stack = stack;
+    thr->state = RUNNABLE;
+    thr->sync = 0;
+    thr->joincnt = 0;
+    thr->func = func;
+    thr->arg = arg;
+    // align sp to 8 bytes, not 16, as if the function's reached via a call instruction.
+    // the C standard mandates that sp should be aligned to 16 bytes before a call instruction.
+    // thus, after call instruction pushed the return address onto the stack, sp should land on
+    // a 8-byte boundary
+    sp = (char *)(((uintptr_t)sp & ~15) - 8);
+    thr->con = (struct context*)(sp -= sizeof(struct context));
+    thr->con->rip = (unsigned long)start_uthread; // swtch() returns to start_uthread() from scheduler()
     // Pick a core
     int nextcore, nextnextcore;
     atomic_load_and_update(g.nextcore, nextcore, 
@@ -171,24 +141,24 @@ thr_create(void*(*func)(), void* arg, char* name) {
     struct core *core = &g.cores[nextcore];
     // Add to work queue
     acquire(&core->lk);
-    tcb->next = core->thrs.next;
-    core->thrs.next = tcb;
+    thr->next = core->thrs.next;
+    core->thrs.next = thr;
     release(&core->lk);
     // Return id to user
-    tcb->core = core;
-    tcb->id.thr = tcb;
-    tcb->id.coreid = core->id;
+    thr->core = core;
+    thr->id.thr = thr;
+    thr->id.coreid = core->id;
 
-    return (uint64_t)&tcb->id;
+    return (uint64_t)&thr->id;
 }
 
 uint64_t
-thr_self(void) {
+uthread_self(void) {
     return (uint64_t)mycore->thr;
 }
 
 int
-thr_join(uint64_t id, void* *statusptr) {
+uthread_join(uint64_t id, void* *statusptr) {
     struct tid *thrid = (struct tid *)id;
     int coreid = thrid->coreid;
     struct tcb *thr = thrid->thr;
@@ -223,23 +193,24 @@ thr_join(uint64_t id, void* *statusptr) {
 }
 
 void
-thr_exit(void *status) {
+uthread_exit(void *status) {
     mycore->thr->status = status;
     mycore->thr->state = JOINABLE;
-    yield(0);
+    yield();
 }
 
 void*
 test(void *arg) {
     for (;;) {
-        _printf("%s\n", (char*)arg);
+        uthread_printf("%s", (char*)arg);
+        // uthread_printf("");
     }
     return 0;
 }
 
 int main() {
-    thr_create(test, "t1", "1");
-    thr_create(test, "t2", "2");
-    thr_create(test, "t3", "3");
+    uthread_create(test, "1\n", "1");
+    uthread_create(test, "2\n", "2");
+    // uthread_create(test, "3", "3");
     for(;;);
 }

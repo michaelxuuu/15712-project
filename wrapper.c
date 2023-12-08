@@ -1,10 +1,16 @@
 #include "defs.h"
 
-struct sleeplock malloc_lk = SLEEPSPINLOCK_INIT_LIST;
-struct sleeplock printf_lk = SLEEPSPINLOCK_INIT_LIST;
+static struct sleeplock malloc_lk;
+static struct sleeplock printf_lk;
+
+void
+wrapper_init() {
+    sleeplock_init(&malloc_lk, "malloc.lk");
+    sleeplock_init(&printf_lk, "printf.lk");
+}
 
 void*
-_malloc(size_t size) {
+uthread_malloc(size_t size) {
     void* ptr;
     sleeplock_aquire(&malloc_lk);
     ptr = malloc(size);
@@ -13,14 +19,14 @@ _malloc(size_t size) {
 }
 
 void
-_free(void* ptr) {
+uthread_free(void* ptr) {
     sleeplock_aquire(&malloc_lk);
     free(ptr);
     sleeplock_release(&malloc_lk);
 }
 
 void
-_printf(const char* fmt, ...) {
+uthread_printf(const char* fmt, ...) {
     sleeplock_aquire(&printf_lk);
     va_list ap;
     va_start(ap, fmt);

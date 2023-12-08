@@ -1,6 +1,7 @@
 .text
 .extern _dosigret
 
+// Note this swtch does not support switching to oneself
 .global _swtch
 _swtch:
     // rdi: where to save this stack
@@ -22,17 +23,6 @@ _swtch:
     pop %r14
     pop %r13
     pop %r12
-    ret
-
-// "ret" (instead of "call") here to pop one 8 byte value from the stack
-// to move sp up by 8 bytes
-.global _doret1
-_doret1:
-    ret
-
-.global _doret2
-_doret2:
-    mov 24(%rsp), %rdi // Prep arugment for func()
     ret
 
 // rdi: addr

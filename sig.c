@@ -2,36 +2,21 @@
 
 void
 sigalrm_handler(int signo) {
-    if (mycore != &g.cores[0]) {
-        pthread_kill(g.cores[0].pthread, SIGALRM);
-        return;
-    }
-    for (int i = 1; i < g.ncore; i++)
-        pthread_kill(g.cores[i].pthread, SIGUSR1);
-    yield(1);
-}
-
-void
-sigusr1_handler(int signo, siginfo_t *siginfo, void *context) {
-    yield(1);
+    mycore->term++;
+    struct core *nextcore = &g.cores[(mycore->id + 1) % g.ncore];
+    if (nextcore != mycore && nextcore->term < mycore->term)
+        pthread_kill(nextcore->pthread, SIGALRM);
+    yield();
 }
 
 void
 sig_init() {
     struct sigaction sa_alrm;
-    struct sigaction sa_usr1;
-
     memset(&sa_alrm, 0, sizeof(sa_alrm));
     sa_alrm.sa_flags = SA_RESTART;
     sa_alrm.sa_handler = sigalrm_handler;
     sigfillset(&sa_alrm.sa_mask);
     sigaction(SIGALRM, &sa_alrm, NULL);
-
-    memset(&sa_usr1, 0, sizeof(sa_usr1));
-    sa_usr1.sa_flags = SA_SIGINFO | SA_RESTART;
-    sa_usr1.sa_sigaction = sigusr1_handler;
-    sigfillset(&sa_usr1.sa_mask);
-    sigaction(SIGUSR1, &sa_usr1, NULL);
 }
 
 int
@@ -52,4 +37,12 @@ sig_enable() {
     sigset_t s;
     sigemptyset(&s);
     pthread_sigmask(SIG_SETMASK, &s, 0);
+}
+
+int
+sig_pending() {
+    sigset_t s;
+    sigemptyset(&s);
+    sigpending(&s);
+    return sigismember(&s, SIGALRM);
 }

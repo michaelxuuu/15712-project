@@ -1,5 +1,6 @@
 struct core {
     int id;
+    int term;
     int lkcnt;
     int sigen;
     sigset_t sigset;

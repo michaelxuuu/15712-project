@@ -1,7 +1,8 @@
 #include "defs.h"
 
 void
-spinlock_init(struct spinlock *lk) {
+spinlock_init(struct spinlock *lk, char *name) {
+    lk->name = name;
     lk->owner = 0;
     lk->locked = 0;
 }

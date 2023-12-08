@@ -6,6 +6,8 @@ struct tcb {
     int joincnt;
     char* stack;
     void* status;
+    void* arg;
+    uthread_func func;
     struct core *core;
     struct context *con;
     struct tcb *next;

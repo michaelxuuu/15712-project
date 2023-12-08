@@ -12,6 +12,7 @@
 #include <sys/syscall.h>
 
 // Order matters here
+typedef void *(*uthread_func)(void *);
 #include "spinlock.h"
 #include "sleeplock.h"
 #include "con.h"
@@ -52,35 +53,37 @@ extern __thread struct core* mycore;
 // spinlock.c
 void acquire(struct spinlock*);
 void release(struct spinlock*);
-void spinlock_init(struct spinlock*);
+void spinlock_init(struct spinlock *lk, char *name);
 
 // sleeplock.c
-void sleepspinlock_init(struct sleeplock*);
 void sleeplock_aquire(struct sleeplock*);
 void sleeplock_release(struct sleeplock*);
+void sleeplock_init(struct sleeplock*, char *name);
 
 // asm.S
-void doret1();
-void doret2();
-void sigret();
 int xchg(void* p, int new);
 int cmpxchg(void* p, int old, int new);
+void swtch(struct context**, struct context*);
 
 // thread.c
-void yield(int fromsig);
-void swtch(struct context**, struct context*);
+void yield();
 
 // sig.c
 void sig_init();
-int sig_disable();
 void sig_enable();
+int sig_disable();
+int sig_pending();
 
+// timer.c
+void timer_init();
 
 // wrapper.c
-void* _malloc(size_t size);
-void _free(void* ptr);
-void _printf(const char* fmt, ...);
+void wrapper_init();
+void* uthread_malloc(size_t size);
+void uthread_free(void* ptr);
+void uthread_printf(const char* fmt, ...);
 
 // debug.c
 void dbg_printf(char *fmt, ...);
+sigset_t dbg_get_sigmask();
 
