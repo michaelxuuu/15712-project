@@ -1,5 +1,7 @@
 #include "defs.h"
 
+// Yield control from the uthread running on "mycore" to the "mycore's" scheduler,
+// which then finds and schedules the next runnable uthread.
 void
 yield() {
     acquire(&mycore->lk);
@@ -9,24 +11,32 @@ yield() {
     release(&mycore->lk);
 }
 
+// swtch() here from scheduler() when a uthread's scheduled for the first time.
 static void
 start_uthread() {
-    struct tcb *thr;
-    release(&mycore->lk); // this does not enable siganls. we got here from scheduler() and we entered scheduler from signal handler where signals are disabled.
-    sig_enable(); // there'll be no sigret helping us re-enable interrupts. thus, we need to re-enable interrupts ourselves
-    thr = mycore->thr; // obtain the thread to execute from the core structure (save to do this before and after re-enabling signals)
-    thr->status = thr->func(thr->arg); // exeucte the function and collect the return status
-    thr->state = JOINABLE; // won't be scheduled agained
-    yield(); // yield the cpu immediately, resource's collected when being joined
+    struct tcb *thr = mycore->thr;
+    release(&mycore->lk); // Release mycore->lk held from yield().
+    sig_enable(); // Enable signals disabled upon entering sigalrm_handler().
+    thr->status = thr->func(thr->arg); // Start the uthread and save the status returned.
+    thr->state = JOINABLE; // Is it save to do without the lock held?
+    yield(); // It's done running. Yield the CPU immediately.
 }
 
-// main thread tcb
+// Uthread that runs main(). The main function is also abstracted into a uthread and participates
+// in scheduling like all other uthreads.
 static struct tcb* thr0 = &(struct tcb){};
 
-// core 0 scheduler stack
-// Other cores will have their scheduler stack created by pthread_create()
+// All softcores, except 0, have their scheduler stacks created by pthread_create().
+// Thus, we need to prepare a scheduler stack for softcore 0 here.
 static char stack0[STACKLEN] __attribute__((aligned(16)));
 
+// This scheduler runs on a separate stack from the uthread stacks and signal stacks.
+// In fact, signals use the same stacks as the uthread functions here since SA_ONSTACK
+// is not set. Therefore, the scheduler has its own context. When a uThread's timer
+// expires, it yields to the scheduler first. The scheduler then finds and schedules the next
+// runnable uThread. So, every context switch involves:
+// uthread 1 ---swtch()--> scheduler() ---swtch()--> uthread 2.
+// This design is adopted from MIT's xv6 - a multi-core RISC-V kernel.
 static void
 scheduler() {
     for (;;) {
@@ -42,7 +52,7 @@ scheduler() {
     }
 }
 
-// Run by each core to initialize themselves
+// Each softcore (pthread) runs this immediately after being spawned.
 static void*
 core_init(void* core){
     // Run by all cores
@@ -59,25 +69,23 @@ core_init(void* core){
         sig_init();
         timer_init();
         wrapper_init();
-        // First thread being the thread that's running now
+        // Initialize the uthread that runs main().
         thr0->name = "main";
         thr0->next = 0;
         thr0->core = core;
         thr0->state = RUNNABLE;
         thr0->joincnt = 0;
         thr0->sync = 0;
-        // Core 0 is backed by the kernel scheduled thread
-        // that's currently running
+        // Set thr0 as the currently running thread on core 0 and add it to the run queue.
         mycore->thr = thr0;
         mycore->thrs.next = thr0;
+        // Core 0 is backed by the currently running pthread.
         mycore->pthread = pthread_self();
-        // This prepares to swtch() to scheduler() to start it
-        mycore->scheduler = (struct context*)((stack0 + STACKLEN - 8) - sizeof(struct context));
-        mycore->scheduler->rip = (unsigned long)scheduler;
         // Create other "cores"
-        sig_disable(); // This will have other cores start with signals disabled
-                        // Their siganls will be enabled unconditionally (in start_uthread()) 
-                        // when their first thread is scheduled to run
+        // This will have other cores start with signals disabled
+        // Their siganls will be enabled unconditionally (in start_uthread())
+        // when their first thread is scheduled to run.
+        sig_disable();
         for (int i = 0; i < g.ncore-1; i++)
             pthread_create(&g.cores[i].pthread, 0, core_init, (void*)&g.cores[i]);
         // Use swtch() to switch to and start the scheduler (instead of yield()) to avoid deadlock
@@ -85,6 +93,9 @@ core_init(void* core){
         // However, the *first* entry of scheduler() will have to start from the begining since it hasn't run yet
         // If we were to call yeild() deadlock would happen when the scheduler's acquiring mycore->lk
         // that yield() has already acquired
+        // Prepare the scheduler context to swtch() to.
+        mycore->scheduler = (struct context*)((stack0 + STACKLEN - 8) - sizeof(struct context));
+        mycore->scheduler->rip = (unsigned long)scheduler;
         swtch(&thr0->con, mycore->scheduler);
         release(&mycore->lk); // Relese the lock held by scheduler()
         // Now that scheduler() is properly initialized, and the next yield() called by handler will take us 

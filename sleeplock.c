@@ -10,19 +10,27 @@ sleeplock_init(struct sleeplock *lk, char *name) {
 void
 yield_to(struct tcb *thr) {
     struct tcb *me;
-    sig_disable(); // If the one we yield to is in the signal handler, this makes sure that we do not enable signals there.
-    acquire(&mycore->lk);
     me = mycore->thr;
+    // Do not yield if I have become the owner.
+    if (me == thr) return;
+    // If the thread we yield to is in the signal handler,
+    // this makes sure that we do not enable signals there.
+    // There are only two places swtch() takes us to. One is
+    // the below code, and the other is inside of scheduler().
+    // Either of them has signals disabled.
+    sig_disable();
+    acquire(&mycore->lk);
     mycore->thr = thr;
-    if (me != thr) swtch(&me->con, thr->con); // Cannot switch to myself. (This happens when the owner changed between when you release the lock and when you call yeild_to()).
+    // Cannot switch to myself. (This happens when the owner changed between when you release the lock and when you call yeild_to()).
+    swtch(&me->con, thr->con);
     release(&mycore->lk);
     sig_enable();
 }
 
 void
 sleeplock_aquire(struct sleeplock *lk) {
-    struct waiter waiter;
     struct tcb *thr;
+    struct waiter waiter;
     thr = mycore->thr;
     waiter.thr = thr;
     waiter.next = 0;
@@ -40,6 +48,7 @@ sleeplock_aquire(struct sleeplock *lk) {
         // This is done with the lock held to avoid "lost wakeup."
         thr->state = SLEEPING;
         release(&lk->lk);
+        // yield();
         yield_to(lk->owner);
     }
 }

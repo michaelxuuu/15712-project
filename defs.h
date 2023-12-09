@@ -51,6 +51,7 @@ extern struct runtime g;
 extern __thread struct core* mycore;
 
 // spinlock.c
+// Note this function also disable signals on the softcore on which it's called.
 void acquire(struct spinlock*);
 void release(struct spinlock*);
 void spinlock_init(struct spinlock *lk, char *name);

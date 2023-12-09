@@ -11,7 +11,7 @@ gs() {
 
 
 void write_char(char c) {
-    write(STDOUT_FILENO, &c, 1);
+    write(STDERR_FILENO, &c, 1);  // File descriptor 1 is stdout
 }
 
 void write_str(const char *str) {
@@ -20,85 +20,99 @@ void write_str(const char *str) {
     }
 }
 
-void write_hex(unsigned long value) {
-    char buffer[16];  // Assuming a long integer, so 16 characters plus null terminator
-    int length = 0;
-
-    // Convert long integer to hexadecimal string
-    do {
-        buffer[length++] = "0123456789abcdef"[value % 16];
-        value /= 16;
-    } while (value);
-
-    // Reverse the string
-    for (int i = length - 1; i >= 0; --i) {
-        write_char(buffer[i]);
-    }
-}
-
 void write_int(int value) {
+    char buffer[20];  // Assuming a 32-bit integer, which can have up to 10 digits
+    int i = 0;
+
     if (value < 0) {
         write_char('-');
         value = -value;
     }
-    write_hex(value);
+
+    // Convert the integer to a string
+    do {
+        buffer[i++] = '0' + value % 10;
+        value /= 10;
+    } while (value > 0);
+
+    // Reverse the string
+    while (i > 0) {
+        write_char(buffer[--i]);
+    }
 }
 
-void write_unsigned(unsigned int value) {
-    write_hex(value);
+void write_hex(unsigned long value, int uppercase) {
+    char buffer[20];
+    int i = 0;
+
+    do {
+        char digit = value % 16;
+        buffer[i++] = digit < 10 ? '0' + digit : (uppercase ? 'A' : 'a') + digit - 10;
+        value /= 16;
+    } while (value > 0);
+
+    while (i > 0) {
+        write_char(buffer[--i]);
+    }
 }
 
-void write_ptr(void *ptr) {
-    write_hex((unsigned long)ptr);
-}
-
-void dbg_printf(char *fmt, ...) {
+void
+dbg_printf(char *format, ...) {
     va_list args;
-    va_start(args, fmt);
-    while (*fmt) {
-        if (*fmt == '%' && *(fmt + 1) != '\0') {
-            switch (*(++fmt)) {
+    va_start(args, format);
+
+    while (*format) {
+        if (*format == '%') {
+            format++;
+            switch (*format) {
                 case 'd':
                     write_int(va_arg(args, int));
+                    break;
+                case 'c':
+                    write_char(va_arg(args, int));
                     break;
                 case 's':
                     write_str(va_arg(args, const char *));
                     break;
                 case 'x':
-                    write_hex(va_arg(args, unsigned int));
+                    write_hex(va_arg(args, unsigned int), 0);
                     break;
-                case 'l':
-                    if (*(fmt + 1) == 'x') {
-                        write_hex(va_arg(args, unsigned long));
-                        fmt++;
-                    } else if (*(fmt + 1) == 'u') {
-                        write_hex(va_arg(args, unsigned long));
-                        fmt++;
-                    } else if (*(fmt + 1) == 'd') {
-                        write_int(va_arg(args, int));
-                        fmt++;
-                    } else {
-                        write_char('l');
-                    }
+                case 'X':
+                    write_hex(va_arg(args, unsigned int), 1);
                     break;
                 case 'u':
-                    if (*(fmt + 1) == 'l') {
-                        write_unsigned(va_arg(args, unsigned long));
-                        fmt++;
-                    } else {
-                        write_unsigned(va_arg(args, unsigned int));
-                    }
+                    write_int(va_arg(args, unsigned int));
                     break;
                 case 'p':
-                    write_ptr(va_arg(args, void *));
+                    write_str("0x");
+                    write_hex((unsigned long)va_arg(args, void *), 1);
+                    break;
+                case 'l':
+                    format++;
+                    switch (*format) {
+                        case 'd':
+                            write_int(va_arg(args, long));
+                            break;
+                        case 'x':
+                            write_hex(va_arg(args, unsigned long), 0);
+                            break;
+                        case 'u':
+                            write_int(va_arg(args, unsigned long));
+                            break;
+                        default:
+                            write_char('%');
+                            write_char('l');
+                            format--;  // Move back to the last character
+                    }
                     break;
                 default:
-                    write_char(*fmt);
+                    write_char(*format);
             }
         } else {
-            write_char(*fmt);
+            write_char(*format);
         }
-        fmt++;
+        format++;
     }
+
     va_end(args);
 }
