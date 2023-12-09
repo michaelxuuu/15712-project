@@ -3,15 +3,20 @@
 void
 sleeplock_init(struct sleeplock *lk, char *name) {
     lk->owner = 0;
+    lk->ownercore = 0;
     lk->waiters.next = 0;
     spinlock_init(&lk->lk, name);
 }
 
-void
+// This yield implementation does not go through the scheduler; instead, it enables
+// a uthread to defer some of its time quota to another uthread that holds the resources
+// needed for this uthread to make progress.
+static void
 yield_to(struct tcb *thr) {
     struct tcb *me;
     me = mycore->thr;
     // Do not yield if I have become the owner.
+    // Cannot switch to myself. (This happens when the owner changed between when you release the lock and when you call yeild_to()).
     if (me == thr) return;
     // If the thread we yield to is in the signal handler,
     // this makes sure that we do not enable signals there.
@@ -21,7 +26,6 @@ yield_to(struct tcb *thr) {
     sig_disable();
     acquire(&mycore->lk);
     mycore->thr = thr;
-    // Cannot switch to myself. (This happens when the owner changed between when you release the lock and when you call yeild_to()).
     swtch(&me->con, thr->con);
     release(&mycore->lk);
     sig_enable();
@@ -38,18 +42,26 @@ sleeplock_aquire(struct sleeplock *lk) {
     // No owner. I become the owner!
     if (!lk->owner) {
         lk->owner = mycore->thr;
+        lk->ownercore = mycore;
         release(&lk->lk);
     } else {
         // Add calling thread to the waiting queue.
         waiter.next = lk->waiters.next;
         lk->waiters.next = &waiter;
-        // Change the calling thread's state to SLEEPING.
-        // So it's only scheduled after being assigned as the owner.
-        // This is done with the lock held to avoid "lost wakeup."
-        thr->state = SLEEPING;
-        release(&lk->lk);
-        // yield();
-        yield_to(lk->owner);
+        if (lk->ownercore == mycore) {
+            // Change the calling thread's state to SLEEPING.
+            // So it's only scheduled after being assigned as the owner.
+            // This is done with the lock held to avoid "lost wakeup."
+            thr->state = SLEEPING;
+            release(&lk->lk);
+            yield_to(lk->owner);
+        } else {
+            // Release the spinlock and wait to be assigned as the owner.
+            // This is when the sleeplock downgrades into a spinlock, especially if the owner is on a different core.
+            // If the owner exits with the lock held on another core, the calling thread would spin forever.
+            release(&lk->lk);
+            while (lk->owner != mycore->thr);
+        }
     }
 }
 

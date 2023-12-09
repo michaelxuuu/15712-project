@@ -1,6 +1,45 @@
-Thread must disable preemption on the core it runs on *before* aquiring a spinlock
+1. Thread must disable preemption on the core it runs on *before* aquiring a spinlock
 
 Imagine the following scenario:
 
 Thread 't', running on core 'x', calls 'uthread_create()' to create a new thread. After creating the thread control block, it attempts to add it to the thread table of the core it runs on. To do this, it acquires the spin lock 'lk' on the thread table first. Suppose then it gets preempted due to a timer signal. In the signal handler, it yields to the scheduler, which also tries to acquire the same lock held by 't' in order to find the next runnable thread and schedule it. However, it fails to do so because the lock is held by 't,' and 't' has been descheduled. As a result, the scheduler gets stuck. Unfortunately, the scheduler has all signals blocked and cannot be preempted, which means it cannot schedule 't' to allow it to run and release the lock, leading to a core deadlock.
 
+2. yield_to()
+
+yield_to() is used in the sleep lock implementation to transfer control from the thread that has failed to acquire the lock to the lock owner. This approach is logical because, if you find yourself unable to make progress, there's no point in spinning or yielding to some other random thread. Instead, deferring the execution to the lock owner allows for "borrowing" its time quota to maximize performance. Consider the example below to understand how this optimization improves performance.
+
+In our system, we have three threads. One of them executes an infinite loop with an empty loop body. The other two execute an infinite loop that prints "1\n" and "2\n," respectively, by calling uthread_printf(), which takes a sleep lock upon entry and release.
+
+If the thread that failed to grab the lock yields to the next runnable thread via yield(), you would observe the following printing result:
+
+1
+2
+switch to 3
+(1s)
+1
+2
+switch to 3
+(1s)
+
+Clearly, 1s and 2s are printed instantly, while the printing pauses for 1s after "switch to 3" is printed. This is because after 1 prints, it assigns 2 as the owner and yields to 2. Naturally and correctly, 2 executes and prints 2 before releasing the lock and assigning 1 back to be the owner. When 2 releases the lock, it yields to 3. However, 3 would use up all of its time quota until it gets descheduled. One problem with this approach is that 1 and 2 are not making full use of their time quota, which wouldn't be the case even if a spin lock were used.
+
+Now, consider what would happen if we implemented 'yield_to()' to always switch to the lock owner. The following printing result should be generated:
+
+1
+2
+1
+2
+1
+2
+... (2s)
+switch to 3
+1
+2
+1
+2
+1
+2
+... (2s)
+switch to 3
+
+Now, the time quota allocated for 1 has been sliced and shared between 1 and 2, as has the time quota for 2. With the same amount of time, much more printing can be done compared to when using yield().
