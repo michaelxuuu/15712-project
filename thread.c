@@ -5,9 +5,15 @@
 void
 yield() {
     acquire(&mycore->lk);
+    dbg_printf("%s yields\n", mycore->thr->name);
     if (mycore->thr->state == RUNNING)
         mycore->thr->state = RUNNABLE;
     swtch(&mycore->thr->con, mycore->scheduler);
+    // if it left of from signal handler
+    // it would assume the sig_disable_cnt to be at least 2
+    // however, it's possible it's not if yield() is not called from the signal hanlder but from start_uthread()
+    // leading to the possiblility of sig_disable_cnt being 1, breaking the assumption
+    // thus, siganls would be enabled from within the signal hanlder, resulting undefined behavior, but why???
     release(&mycore->lk);
 }
 
@@ -19,6 +25,7 @@ start_uthread() {
     sig_enable(); // Enable signals disabled upon entering sigalrm_handler().
     thr->status = thr->func(thr->arg); // Start the uthread and save the status returned.
     thr->state = JOINABLE; // Is it save to do without the lock held?
+    sig_disable();
     yield(); // It's done running. Yield the CPU immediately.
 }
 
@@ -40,6 +47,7 @@ static char stack0[STACKLEN] __attribute__((aligned(16)));
 static void
 scheduler() {
     for (;;) {
+        
         acquire(&mycore->lk);
         for (struct tcb *thr = mycore->thrs.next; thr; thr = thr->next) {
             if (thr->state != RUNNABLE) continue;
@@ -62,8 +70,10 @@ core_init(void* core){
     mycore->term = 0;
     mycore->lkcnt = 0;
     mycore->thrs.next = 0;
+    mycore->sig_disable_cnt = 0;
     mycore->scheduler = (struct context*)0xdeadbeef;
     spinlock_init(&mycore->lk, "mycore.lk");
+    sig_disable();
     // Run by core 0
     if (mycore == &g.cores[0]) {
         sig_init();
@@ -111,7 +121,7 @@ core_init(void* core){
     return 0;
 }
 
-static void
+void
 runtime_init() {
     g.init = 1;
     g.ncore = 1;
@@ -150,15 +160,17 @@ uthread_create(uthread_func func, void* arg, char* name) {
     atomic_load_and_update(g.nextcore, nextcore, 
         nextnextcore, (nextcore + 1) % g.ncore);
     struct core *core = &g.cores[nextcore];
+
+    // Return id to user
+    thr->core = core;
+    thr->id.thr = thr;
+    thr->id.coreid = core->id;
+
     // Add to work queue
     acquire(&core->lk);
     thr->next = core->thrs.next;
     core->thrs.next = thr;
     release(&core->lk);
-    // Return id to user
-    thr->core = core;
-    thr->id.thr = thr;
-    thr->id.coreid = core->id;
 
     return (uint64_t)&thr->id;
 }
@@ -208,20 +220,4 @@ uthread_exit(void *status) {
     mycore->thr->status = status;
     mycore->thr->state = JOINABLE;
     yield();
-}
-
-void*
-test(void *arg) {
-    for (;;) {
-        uthread_printf("%s", (char*)arg);
-        // uthread_printf("");
-    }
-    return 0;
-}
-
-int main() {
-    uthread_create(test, "1\n", "1");
-    uthread_create(test, "2\n", "2");
-    // uthread_create(test, "3", "3");
-    for(;;);
 }

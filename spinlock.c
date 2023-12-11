@@ -11,10 +11,10 @@ spinlock_init(struct spinlock *lk, char *name) {
 void
 acquire(struct spinlock *lk) {
     // Disable signals on this core
-    int sigen = sig_disable();
+    sig_disable();
     // Record signal status when no locks held
     if (!mycore->lkcnt)
-        mycore->sigen = sigen;
+        mycore->sigen_nolk = !(mycore->sig_disable_cnt > 1);
     // Increment lock count
     mycore->lkcnt++;
     while (xchg(&lk->locked, 1));
@@ -27,6 +27,6 @@ release(struct spinlock *lk){
     lk->owner = 0;
     asm volatile("movl $0, %0" : "+m"(lk->locked));
     // If signals were initially off, we leave them off.
-    if (!--mycore->lkcnt && mycore->sigen)
+    if (!--mycore->lkcnt && mycore->sigen_nolk)
         sig_enable();
 }

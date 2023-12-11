@@ -2,7 +2,8 @@ struct core {
     int id;
     int term;
     int lkcnt;
-    int sigen;
+    int sig_disable_cnt;
+    int sigen_nolk;
     sigset_t sigset;
     struct tcb thrs;
     struct tcb *thr;

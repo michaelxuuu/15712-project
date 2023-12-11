@@ -11,13 +11,15 @@ sleeplock_init(struct sleeplock *lk, char *name) {
 // This yield implementation does not go through the scheduler; instead, it enables
 // a uthread to defer some of its time quota to another uthread that holds the resources
 // needed for this uthread to make progress.
+// If we are here it's guranteed that the old owner is on the same core as the calling thread!
 static void
-yield_to(struct tcb *thr) {
+yield_to(struct tcb *oldowner, struct sleeplock *lk) {
     struct tcb *me;
+    struct tcb *newowner;
     me = mycore->thr;
     // Do not yield if I have become the owner.
     // Cannot switch to myself. (This happens when the owner changed between when you release the lock and when you call yeild_to()).
-    if (me == thr) return;
+    if (lk->owner != oldowner) return;
     // If the thread we yield to is in the signal handler,
     // this makes sure that we do not enable signals there.
     // There are only two places swtch() takes us to. One is
@@ -25,8 +27,10 @@ yield_to(struct tcb *thr) {
     // Either of them has signals disabled.
     sig_disable();
     acquire(&mycore->lk);
-    mycore->thr = thr;
-    swtch(&me->con, thr->con);
+    // Check again if the owner has changed.
+    if (lk->owner != oldowner) return;
+    mycore->thr = oldowner;
+    swtch(&me->con, oldowner->con);
     release(&mycore->lk);
     sig_enable();
 }
@@ -34,11 +38,13 @@ yield_to(struct tcb *thr) {
 void
 sleeplock_aquire(struct sleeplock *lk) {
     struct tcb *thr;
+    struct tcb *oldowner;
     struct waiter waiter;
     thr = mycore->thr;
     waiter.thr = thr;
     waiter.next = 0;
     acquire(&lk->lk);
+    assert(mycore->thr != lk->owner); // Not a re-entrant lock!
     // No owner. I become the owner!
     if (!lk->owner) {
         lk->owner = mycore->thr;
@@ -53,8 +59,11 @@ sleeplock_aquire(struct sleeplock *lk) {
             // So it's only scheduled after being assigned as the owner.
             // This is done with the lock held to avoid "lost wakeup."
             thr->state = SLEEPING;
+            oldowner = lk->owner;
             release(&lk->lk);
-            yield_to(lk->owner);
+            // If the state is not set to SLEEPING, the scheduler can come in here
+            // and schedule this thread.
+            yield_to(oldowner, lk);
         } else {
             // Release the spinlock and wait to be assigned as the owner.
             // This is when the sleeplock downgrades into a spinlock, especially if the owner is on a different core.

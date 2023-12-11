@@ -3,12 +3,25 @@
 #include <stdarg.h>
 
 sigset_t
-gs() {
+debug_get_mask() {
     sigset_t s;
     pthread_sigmask(SIG_SETMASK, 0, &s);
     return s;
 }
 
+void
+debug_get_stat() {
+    struct tcb *running = 0;
+    int total_cnt = 0;
+    int alive_cnt = 0;
+    for (struct tcb *p = mycore->thrs.next; p; p = p->next, total_cnt++) {
+        if (p->state != JOINABLE)
+            alive_cnt++;
+        if (p->state == RUNNING)
+            running = p;
+    }
+    dbg_printf("total: %d alive: %d", total_cnt, alive_cnt);
+}
 
 void write_char(char c) {
     write(STDERR_FILENO, &c, 1);  // File descriptor 1 is stdout

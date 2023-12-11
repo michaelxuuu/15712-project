@@ -5,6 +5,7 @@
 #include <stdarg.h>
 #include <string.h>
 #include <unistd.h>
+#include <assert.h>
 #include <pthread.h>
 
 #include <sys/time.h>
@@ -72,8 +73,7 @@ void yield();
 // sig.c
 void sig_init();
 void sig_enable();
-int sig_disable();
-int sig_pending();
+void sig_disable();
 
 // timer.c
 void timer_init();

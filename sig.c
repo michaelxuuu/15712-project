@@ -6,7 +6,11 @@ sigalrm_handler(int signo) {
     struct core *nextcore = &g.cores[(mycore->id + 1) % g.ncore];
     if (nextcore != mycore && nextcore->term < mycore->term)
         pthread_kill(nextcore->pthread, SIGALRM);
+    mycore->sig_disable_cnt++;
+    dbg_printf("%s entered hanlder\n", mycore->thr->name);
     yield();
+    dbg_printf("%s exited from hanlder\n", mycore->thr->name);
+    mycore->sig_disable_cnt = 0;
 }
 
 void
@@ -19,30 +23,20 @@ sig_init() {
     sigaction(SIGALRM, &sa_alrm, NULL);
 }
 
-int
+void
 sig_disable() {
     sigset_t s1, s2;
     sigfillset(&s1);
     sigdelset(&s1, SIGKILL);
     sigdelset(&s1, SIGSTOP);
     pthread_sigmask(SIG_SETMASK, &s1, &s2);
-    // Signals already disabled
-    if (s2 == s1)
-        return 0;
-    return 1;
+    mycore->sig_disable_cnt++;
 }
 
 void
 sig_enable() {
     sigset_t s;
     sigemptyset(&s);
+    mycore->sig_disable_cnt = 0;
     pthread_sigmask(SIG_SETMASK, &s, 0);
-}
-
-int
-sig_pending() {
-    sigset_t s;
-    sigemptyset(&s);
-    sigpending(&s);
-    return sigismember(&s, SIGALRM);
 }
