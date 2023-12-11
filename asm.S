@@ -1,5 +1,4 @@
 .text
-.extern _dosigret
 
 // Note this swtch does not support switching to oneself
 .global _swtch

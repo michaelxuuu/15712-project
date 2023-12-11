@@ -106,7 +106,7 @@ core_init(void* core){
         // If we were to call yeild() deadlock would happen when the scheduler's acquiring mycore->lk
         // that yield() has already acquired
         // Prepare the scheduler context to swtch() to.
-        mycore->scheduler = (struct context*)((stack0 + STACKLEN - 8) - sizeof(struct context));
+        mycore->scheduler = (struct context*)((stack0 + 4096 - 8) - sizeof(struct context));
         mycore->scheduler->rip = (unsigned long)scheduler;
         swtch(&thr0->con, mycore->scheduler);
         release(&mycore->lk); // Relese the lock held by scheduler()
