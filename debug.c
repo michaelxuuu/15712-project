@@ -20,7 +20,7 @@ debug_get_stat() {
         if (p->state == RUNNING)
             running = p;
     }
-    dbg_printf("total: %d alive: %d", total_cnt, alive_cnt);
+    debug_printf("total: %d alive: %d", total_cnt, alive_cnt);
 }
 
 void write_char(char c) {
@@ -70,7 +70,7 @@ void write_hex(unsigned long value, int uppercase) {
 }
 
 void
-dbg_printf(char *format, ...) {
+debug_printf(char *format, ...) {
     va_list args;
     va_start(args, format);
 

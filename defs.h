@@ -37,7 +37,8 @@ enum state {
     JOINED
 };
 
-#define STACKLEN 4096
+#define PAGELEN sysconf(_SC_PAGESIZE)
+#define STACKLEN (PAGELEN + PAGELEN)
 
 #define atomic_load_and_update(var, old, new, udpate) \
     do { \
@@ -85,6 +86,5 @@ void uthread_free(void* ptr);
 void uthread_printf(const char* fmt, ...);
 
 // debug.c
-void dbg_printf(char *fmt, ...);
-sigset_t dbg_get_sigmask();
+void debug_printf(char *fmt, ...);
 

@@ -2,14 +2,14 @@
 
 void
 sigalrm_handler(int signo) {
+    // Entering a signal hanlder has the same effect as to calling sig_disable().
+    mycore->sig_disable_cnt++;
     mycore->term++;
     struct core *nextcore = &g.cores[(mycore->id + 1) % g.ncore];
     if (nextcore != mycore && nextcore->term < mycore->term)
         pthread_kill(nextcore->pthread, SIGALRM);
-    mycore->sig_disable_cnt++;
-    dbg_printf("%s entered hanlder\n", mycore->thr->name);
     yield();
-    dbg_printf("%s exited from hanlder\n", mycore->thr->name);
+    // Leaving a signal hanlder has the same effect as to calling sig_enable().
     mycore->sig_disable_cnt = 0;
 }
 
@@ -25,11 +25,10 @@ sig_init() {
 
 void
 sig_disable() {
-    sigset_t s1, s2;
-    sigfillset(&s1);
-    sigdelset(&s1, SIGKILL);
-    sigdelset(&s1, SIGSTOP);
-    pthread_sigmask(SIG_SETMASK, &s1, &s2);
+    sigset_t s;
+    sigfillset(&s);
+    // Optimize me?
+    pthread_sigmask(SIG_SETMASK, &s, 0);
     mycore->sig_disable_cnt++;
 }
 

@@ -5,15 +5,9 @@
 void
 yield() {
     acquire(&mycore->lk);
-    dbg_printf("%s yields\n", mycore->thr->name);
     if (mycore->thr->state == RUNNING)
         mycore->thr->state = RUNNABLE;
     swtch(&mycore->thr->con, mycore->scheduler);
-    // if it left of from signal handler
-    // it would assume the sig_disable_cnt to be at least 2
-    // however, it's possible it's not if yield() is not called from the signal hanlder but from start_uthread()
-    // leading to the possiblility of sig_disable_cnt being 1, breaking the assumption
-    // thus, siganls would be enabled from within the signal hanlder, resulting undefined behavior, but why???
     release(&mycore->lk);
 }
 
@@ -24,7 +18,15 @@ start_uthread() {
     release(&mycore->lk); // Release mycore->lk held from yield().
     sig_enable(); // Enable signals disabled upon entering sigalrm_handler().
     thr->status = thr->func(thr->arg); // Start the uthread and save the status returned.
-    thr->state = JOINABLE; // Is it save to do without the lock held?
+    thr->state = JOINABLE; // Is it save to do without the lock held? Yes with the current implementation.
+    // Increment sig_disable_cnt since release() in yield() expects sig_disable_cnt to be at least 2 if the thread
+    // being yielded to was interrupted by SIGALRM and is in the middle of executing the signal handler.
+    // Otherwise, release() in yield() may re-enable interrupts in the signal handler, causing nested signal handling,
+    // which could be problematic if the stack is small.
+    // Another viable solution to this would be to call sig_disable() in yield, which can have better generalizability.
+    // In short, yield() expects signals to be disabled since the thread yield transfers control to is usually in
+    // the signal handler, and I do not wish to handle or reason through nested signal handling. In the worst case,
+    // it can easily overflow the stack, requiring additional logic to cope with.
     sig_disable();
     yield(); // It's done running. Yield the CPU immediately.
 }
@@ -35,7 +37,7 @@ static struct tcb* thr0 = &(struct tcb){};
 
 // All softcores, except 0, have their scheduler stacks created by pthread_create().
 // Thus, we need to prepare a scheduler stack for softcore 0 here.
-static char stack0[STACKLEN] __attribute__((aligned(16)));
+static char stack0[4096] __attribute__((aligned(16)));
 
 // This scheduler runs on a separate stack from the uthread stacks and signal stacks.
 // In fact, signals use the same stacks as the uthread functions here since SA_ONSTACK
@@ -53,7 +55,7 @@ scheduler() {
             if (thr->state != RUNNABLE) continue;
             thr->state = RUNNING;
             mycore->thr = thr;
-            dbg_printf("swtch to %s\n", thr->name);
+            debug_printf("swtch to %s\n", thr->name);
             swtch(&mycore->scheduler, thr->con);
         }
         release(&mycore->lk);
@@ -129,6 +131,8 @@ runtime_init() {
     // g.ncore = sysconf(_SC_NPROCESSORS_ONLN);
     g.cores = malloc(sizeof(struct core) * g.ncore);
     core_init(&g.cores[0]);
+    // When we get back here, we are already in a uthread - "thr0" :)
+    // "thr0" is created in core_init() and assigned to run main().
 }
 
 uint64_t
@@ -137,6 +141,8 @@ uthread_create(uthread_func func, void* arg, char* name) {
     // Set up stack
     char *stack = (char*)mmap(NULL, STACKLEN, PROT_READ |
         PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    // Set up guard page
+    mprotect(stack, PAGELEN, PROT_NONE);
     char *sp = stack + STACKLEN;
     // Put tcb at the top of the stack
     sp -= sizeof(struct tcb);
