@@ -6,7 +6,7 @@ sigalrm_handler(int signo) {
     mycore->sig_disable_cnt++;
     mycore->term++;
     struct core *nextcore = &g.cores[(mycore->id + 1) % g.ncore];
-    if (nextcore != mycore && nextcore->term < mycore->term)
+    if (nextcore != mycore && nextcore->term < mycore->term && nextcore->pthread != 0)
         pthread_kill(nextcore->pthread, SIGALRM);
     yield();
     // Leaving a signal hanlder has the same effect as to calling sig_enable().

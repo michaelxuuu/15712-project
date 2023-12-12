@@ -3,4 +3,5 @@ struct runtime {
     int ncore;
     int nextcore;
     struct core* cores;
+    atomic_uint readycnt;
 };

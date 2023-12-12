@@ -1,5 +1,20 @@
 #include "defs.h"
 
+static void
+addthr(struct tcb *q, struct tcb *t) {
+    t->next = q;
+    t->prev = q->prev;
+    q->prev->next = t;
+    q->prev = t;
+}
+
+static void
+delthr(struct tcb *t) {
+    t->prev->next = t->next;
+    t->next->prev = t->prev;
+}
+
+
 // Yield control from the uthread running on "mycore" to the "mycore's" scheduler,
 // which then finds and schedules the next runnable uthread.
 void
@@ -48,25 +63,21 @@ static char stack0[4096] __attribute__((aligned(16)));
 // This design is adopted from MIT's xv6 - a multi-core RISC-V kernel.
 static void
 scheduler() {
-    for (;;) {
+    int i = 0;
+    for (;;i++) {
         acquire(&mycore->lk);
-        struct tcb *prev = &mycore->thrs;
-        struct tcb *cur = mycore->thrs.next;
-        while (cur) {
-            if (cur->state != RUNNABLE) continue;
-            cur->state = RUNNING;
-            mycore->thr = cur;
-            debug_printf("swtch to %s\n", cur->name);
-            swtch(&mycore->scheduler, cur->con);
-            if (cur->state == JOINABLE) {
-                // Delete cur from mycore->thrs
-                prev->next = cur->next;
-                // Add cur to mycore->joined_thrs
-                cur->next = mycore->joined_thrs.next;
-                mycore->joined_thrs.next = cur;
-                // Advance cur
-                cur = prev->next;
-            } else cur = cur->next;
+        for (struct tcb *thr = mycore->thrs.next; thr != &mycore->thrs; thr = thr->next) {
+            if (thr->state != RUNNABLE) continue;
+            thr->state = RUNNING;
+            mycore->thr = thr;
+            swtch(&mycore->scheduler, thr->con);
+            if (thr->state == JOINABLE) {
+                struct tcb *tmp = thr;
+                thr = thr->prev;
+                delthr(tmp);
+                addthr(&mycore->joined_thrs, tmp);
+                tmp->state = REMOVED;
+            }
         }
         release(&mycore->lk);
     }
@@ -81,9 +92,10 @@ core_init(void* core){
     mycore->thr = 0;
     mycore->term = 0;
     mycore->lkcnt = 0;
-    mycore->thrs.state = 0xdeadbeef;
-    mycore->thrs.next = 0;
-    mycore->joined_thrs.next = 0;
+    mycore->thrs.next = &mycore->thrs;
+    mycore->thrs.prev = &mycore->thrs;
+    mycore->joined_thrs.next = &mycore->joined_thrs;
+    mycore->joined_thrs.prev = &mycore->joined_thrs;
     mycore->sig_disable_cnt = 0;
     mycore->scheduler = (struct context*)0xdeadbeef;
     spinlock_init(&mycore->lk, "mycore.lk");
@@ -102,7 +114,7 @@ core_init(void* core){
         thr0->sync = 0;
         // Set thr0 as the currently running thread on core 0 and add it to the run queue.
         mycore->thr = thr0;
-        mycore->thrs.next = thr0;
+        addthr(&mycore->thrs, thr0);
         // Core 0 is backed by the currently running pthread.
         mycore->pthread = pthread_self();
         // Create other "cores"
@@ -110,7 +122,7 @@ core_init(void* core){
         // Their siganls will be enabled unconditionally (in start_uthread())
         // when their first thread is scheduled to run.
         sig_disable();
-        for (int i = 0; i < g.ncore-1; i++)
+        for (int i = 1; i < g.ncore; i++)
             pthread_create(&g.cores[i].pthread, 0, core_init, (void*)&g.cores[i]);
         // Use swtch() to switch to and start the scheduler (instead of yield()) to avoid deadlock
         // Normally yield() trigger by the sigalrm siganl would have scheduler() pick up from it left off
@@ -128,8 +140,10 @@ core_init(void* core){
         // preceeds initializing the scheduler(), having us jump to executing scheduler() the first time
         // via yield(), resulting mycore->lk being attempted to be acquired a second time and hence a daedlock
         sig_enable(); // Somehow we must enable siganls before we set the timer or the signals would remain off strangely
+        g.readycnt++;
         return 0;
     }
+    g.readycnt++;
     // Enter scheduler() and NEVER return
     scheduler();
     return 0;
@@ -140,19 +154,21 @@ runtime_init() {
     g.init = 1;
     g.ncore = 1;
     g.nextcore = 0;
-    // g.ncore = sysconf(_SC_NPROCESSORS_ONLN);
+    g.ncore = sysconf(_SC_NPROCESSORS_ONLN);
     g.cores = malloc(sizeof(struct core) * g.ncore);
     core_init(&g.cores[0]);
+    while (g.readycnt != g.ncore);
     // When we get back here, we are already in a uthread - "thr0" :)
     // "thr0" is created in core_init() and assigned to run main().
 }
 
-uint64_t
-uthread_create(uthread_func func, void* arg, char* name) {
+int
+uthread_create(uint64_t *id, uthread_func func, void* arg, char* name) {
     if (!g.init) runtime_init();
     // Set up stack
     char *stack = (char*)mmap(NULL, STACKLEN, PROT_READ |
         PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (stack == MAP_FAILED) return -1;
     // Set up guard page
     mprotect(stack, PAGELEN, PROT_NONE);
     char *sp = stack + STACKLEN;
@@ -186,11 +202,12 @@ uthread_create(uthread_func func, void* arg, char* name) {
 
     // Add to work queue
     acquire(&core->lk);
-    thr->next = core->thrs.next;
-    core->thrs.next = thr;
+    addthr(&core->thrs, thr);
     release(&core->lk);
 
-    return (uint64_t)&thr->id;
+    *id = (uint64_t)&thr->id;
+    
+    return 0;
 }
 
 uint64_t
@@ -207,31 +224,29 @@ uthread_join(uint64_t id, void* *statusptr) {
         return -1;
     struct core *core = &g.cores[thrid->coreid];
     acquire(&core->lk);
-    struct tcb *prev = &core->joined_thrs;
-    struct tcb *p = core->joined_thrs.next;
-    for (; p; prev = p, p = p->next) {
+    struct tcb *p = core->thrs.next;
+    for (; p != &core->thrs; p = p->next) {
         if (p != thr) continue;
-        thr->joincnt++;
+        p->joincnt++;
         release(&core->lk);
-        // Wait for thr to exit
-        while (p->state != JOINABLE);
-        // Dequeue
+        // Wait for thr to be moved into mycore->joined_thrs
+        while (p->state != REMOVED);
         acquire(&core->lk);
-        if (p->state != JOINED)
-            prev->next = p->next;
-        p->state = JOINED;
-        // Whoever called join() the last succeeds
-        if (!--thr->joincnt) {
-            *statusptr = p->status;
+        p->joincnt--;
+        break;
+    }
+    p = core->joined_thrs.next;
+    for (; p != &core->joined_thrs; p = p->next) {
+        if (p != thr) continue;
+        if (!p->joincnt) {
+            delthr(p);
+            munmap(p->stack, STACKLEN);
             release(&core->lk);
             return 0;
-        } else {
-            release(&core->lk);
-            return -1;
         }
     }
     release(&core->lk);
-    return 1;
+    return -1;
 }
 
 void

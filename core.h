@@ -9,9 +9,9 @@ struct core {
                     // This flag is checked when the last spin lock is released. 
                     // And if the flag is set, interrupts must be re-enabled when the last spin lock held by this core is released.
     sigset_t sigset;
+    struct tcb *thr;
     struct tcb thrs;
     struct tcb joined_thrs;
-    struct tcb *thr;
     struct spinlock lk;
     pthread_t pthread;
     struct context *scheduler;

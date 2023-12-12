@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <assert.h>
 #include <pthread.h>
+#include <stdatomic.h>
 
 #include <sys/time.h>
 #include <sys/mman.h>
@@ -34,6 +35,7 @@ enum state {
     RUNNABLE,
     SLEEPING,
     JOINABLE,
+    REMOVED,
     JOINED
 };
 
@@ -44,7 +46,7 @@ enum state {
     do { \
         old = var; \
         new = udpate; \
-    } while(cmpxchg(&var, old, new) != old);
+    } while(cmpxchg(&var, new, old) != old);
 
 // runtime.c
 extern struct runtime g;

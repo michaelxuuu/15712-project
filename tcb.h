@@ -11,4 +11,5 @@ struct tcb {
     struct core *core;
     struct context *con;
     struct tcb *next;
+    struct tcb *prev;
 };
