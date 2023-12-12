@@ -64,9 +64,20 @@ void sleeplock_release(struct sleeplock*);
 void sleeplock_init(struct sleeplock*, char *name);
 
 // asm.S
+#ifdef __llvm__
 int xchg(void* p, int new);
 int cmpxchg(void* p, int old, int new);
 void swtch(struct context**, struct context*);
+#elif defined(__GNUC__)
+#define xchg _xchg
+#define cmpxchg _cmpxchg
+#define swtch _swtch
+int _xchg(void* p, int new);
+int _cmpxchg(void* p, int old, int new);
+void _swtch(struct context**, struct context*);
+#else
+#error "Unsupported compiler"
+#endif
 
 // thread.c
 void yield();
