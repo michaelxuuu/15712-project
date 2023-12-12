@@ -3,7 +3,7 @@
 #include <sys/time.h>
 
 int sync = 0;
-#define THRCNT 1000
+#define THRCNT 10000
 #define ITERNUM 1000000
 uint64_t thrs[THRCNT] = {0};
 uint64_t status[THRCNT] = {0};

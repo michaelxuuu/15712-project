@@ -49,14 +49,24 @@ static char stack0[4096] __attribute__((aligned(16)));
 static void
 scheduler() {
     for (;;) {
-        
         acquire(&mycore->lk);
-        for (struct tcb *thr = mycore->thrs.next; thr; thr = thr->next) {
-            if (thr->state != RUNNABLE) continue;
-            thr->state = RUNNING;
-            mycore->thr = thr;
-            debug_printf("swtch to %s\n", thr->name);
-            swtch(&mycore->scheduler, thr->con);
+        struct tcb *prev = &mycore->thrs;
+        struct tcb *cur = mycore->thrs.next;
+        while (cur) {
+            if (cur->state != RUNNABLE) continue;
+            cur->state = RUNNING;
+            mycore->thr = cur;
+            debug_printf("swtch to %s\n", cur->name);
+            swtch(&mycore->scheduler, cur->con);
+            if (cur->state == JOINABLE) {
+                // Delete cur from mycore->thrs
+                prev->next = cur->next;
+                // Add cur to mycore->joined_thrs
+                cur->next = mycore->joined_thrs.next;
+                mycore->joined_thrs.next = cur;
+                // Advance cur
+                cur = prev->next;
+            } else cur = cur->next;
         }
         release(&mycore->lk);
     }
@@ -71,7 +81,9 @@ core_init(void* core){
     mycore->thr = 0;
     mycore->term = 0;
     mycore->lkcnt = 0;
+    mycore->thrs.state = 0xdeadbeef;
     mycore->thrs.next = 0;
+    mycore->joined_thrs.next = 0;
     mycore->sig_disable_cnt = 0;
     mycore->scheduler = (struct context*)0xdeadbeef;
     spinlock_init(&mycore->lk, "mycore.lk");
@@ -195,8 +207,9 @@ uthread_join(uint64_t id, void* *statusptr) {
         return -1;
     struct core *core = &g.cores[thrid->coreid];
     acquire(&core->lk);
-    struct tcb *p, *prev;
-    for (p = core->thrs.next; p; prev = p, p = p->next) {
+    struct tcb *prev = &core->joined_thrs;
+    struct tcb *p = core->joined_thrs.next;
+    for (; p; prev = p, p = p->next) {
         if (p != thr) continue;
         thr->joincnt++;
         release(&core->lk);
