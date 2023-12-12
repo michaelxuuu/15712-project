@@ -1,7 +1,5 @@
 #include "defs.h"
 
-#include <stdarg.h>
-
 sigset_t
 debug_get_mask() {
     sigset_t s;
